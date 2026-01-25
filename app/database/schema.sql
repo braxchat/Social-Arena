@@ -40,4 +40,3 @@ create policy "Allow all operations on rooms" on rooms
 create policy "Allow all operations on room_members" on room_members
   for all using (true) with check (true);
 
-
