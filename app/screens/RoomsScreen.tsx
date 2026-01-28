@@ -21,7 +21,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../navigation/AppNavigator';
-import { getUserRooms, createRoom, getCurrentUser, logout } from '../core';
+import { getUserRooms, createRoom, getCurrentUser, logout, clearAllCache } from '../core';
 import { Room } from '../core/types';
 
 type RoomsScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'Rooms'>;
@@ -107,6 +107,31 @@ export default function RoomsScreen({ navigation }: Props) {
     ]);
   };
 
+  // TEMPORARY: Development/testing only - Remove when ready for production
+  const handleClearCache = () => {
+    Alert.alert(
+      'Clear All Data',
+      'This will delete all cached users, rooms, and data. This action cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Clear All',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await clearAllCache();
+              Alert.alert('Success', 'All cached data cleared');
+              // Navigate to auth screen
+              navigation.replace('Auth');
+            } catch (error: any) {
+              Alert.alert('Error', error.message || 'Failed to clear cache');
+            }
+          },
+        },
+      ]
+    );
+  };
+
   const renderRoom = ({ item }: { item: Room }) => (
     <TouchableOpacity
       style={styles.roomItem}
@@ -126,6 +151,13 @@ export default function RoomsScreen({ navigation }: Props) {
         <Text style={styles.welcomeText}>
           Welcome, {getCurrentUser()?.username || 'User'}
         </Text>
+        {/* TEMPORARY: Development/testing only - Remove when ready for production */}
+        <TouchableOpacity
+          style={styles.clearCacheButton}
+          onPress={handleClearCache}
+        >
+          <Text style={styles.clearCacheText}>Clear Cache</Text>
+        </TouchableOpacity>
       </View>
 
       <View style={styles.createSection}>
@@ -156,7 +188,6 @@ export default function RoomsScreen({ navigation }: Props) {
                 <Text style={styles.modalTitle}>Create New Room</Text>
                 <TextInput
                   style={styles.modalInput}
-                  placeholder="Room name"
                   placeholderTextColor="#888"
                   value={roomName}
                   onChangeText={setRoomName}
@@ -220,6 +251,9 @@ const styles = StyleSheet.create({
     padding: 20,
   },
   header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
     marginBottom: 20,
   },
   welcomeText: {
@@ -234,6 +268,15 @@ const styles = StyleSheet.create({
   headerLogoutText: {
     color: '#4A90E2',
     fontSize: 16,
+    fontWeight: '500',
+  },
+  // TEMPORARY: Development/testing only - Remove when ready for production
+  clearCacheButton: {
+    padding: 5,
+  },
+  clearCacheText: {
+    color: '#FF3B30',
+    fontSize: 12,
     fontWeight: '500',
   },
   createSection: {

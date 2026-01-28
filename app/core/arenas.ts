@@ -118,6 +118,28 @@ export async function createArena(
       };
     }
 
+    // Check if user (host) already has a pending arena in this room
+    const allArenas = store.getArenasByRoomId(roomId);
+    const userPendingArena = allArenas.find(
+      arena => arena.status === 'lobby' && arena.host_id === userId
+    );
+    if (userPendingArena) {
+      // Check if user is still a participant
+      const participant = store.getArenaParticipant(userPendingArena.id, userId);
+      if (participant && participant.status === 'joined') {
+        return {
+          success: false,
+          error: new ArenaError(
+            'You already have a pending arena in this room',
+            ErrorCodes.ACTIVE_ARENA_EXISTS,
+            { active_arena_id: userPendingArena.id }
+          ),
+        };
+      }
+      // If user left, they can rejoin - allow creating a new one or they can rejoin
+      // For now, we'll allow them to create a new one (the old one will be orphaned)
+    }
+
     // Create arena (still using in-memory store for now)
     const arena = store.createArena({
       room_id: roomId,
@@ -204,6 +226,21 @@ export function getActiveArenaInRoom(
   return {
     success: true,
     data: activeArena || null,
+  };
+}
+
+/**
+ * Get pending (lobby) arena in a room
+ */
+export function getPendingArenaInRoom(
+  roomId: string
+): Result<Arena | null, ArenaError> {
+  // No auth required - just get the pending arena
+  const allArenas = store.getArenasByRoomId(roomId);
+  const pendingArena = allArenas.find(arena => arena.status === 'lobby');
+  return {
+    success: true,
+    data: pendingArena || null,
   };
 }
 

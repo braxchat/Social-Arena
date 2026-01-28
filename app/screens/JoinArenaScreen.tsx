@@ -73,12 +73,12 @@ export default function JoinArenaScreen({ navigation, route }: Props) {
       <View style={styles.container}>
         <Text style={styles.title}>Enter Room Code</Text>
       <Text style={styles.subtitle}>
-        Enter the 5-6 character code to join a room
+        Enter the 6 character code to join a room
       </Text>
 
       <TextInput
         style={styles.input}
-        placeholder="H4K9Q"
+        placeholder="H4K9Q2"
         placeholderTextColor="#888888"
         value={roomCode}
         onChangeText={(text) => setRoomCode(text.toUpperCase())}

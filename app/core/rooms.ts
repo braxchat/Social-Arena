@@ -15,17 +15,18 @@ import {
 } from './types';
 import { supabase } from '../lib/supabase';
 import { getDeviceId } from '../lib/deviceId';
+import { store } from './store';
 
 // ============================================================================
 // ROOM CODE GENERATION
 // ============================================================================
 
 /**
- * Generate a unique room code (8-10 characters, uppercase alphanumeric)
+ * Generate a unique room code (6 characters, uppercase alphanumeric)
  */
 function generateRoomCode(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // Exclude ambiguous chars (0, O, I, 1)
-  const length = Math.random() < 0.5 ? 8 : 10; // Randomly 8 or 10 chars
+  const length = 6; // 6 characters
   
   let code = '';
   for (let i = 0; i < length; i++) {
@@ -185,52 +186,95 @@ export async function createRoom(
  * Get room by ID
  * Note: This still uses in-memory store for backward compatibility
  * For Supabase rooms, use getRoomByCode() instead
+ * Requires user to be a member of the room
  */
 export async function getRoom(roomId: string): Promise<Result<Room, ArenaError>> {
-  await getDeviceId(); // Ensure device ID exists, but don't need the value
+  try {
+    const userId = await getDeviceId();
 
-  // Try Supabase first
-  const { data: roomData, error } = await supabase
-    .from('rooms')
-    .select('*')
-    .eq('id', roomId)
-    .single();
+    // Try Supabase first
+    const { data: roomData, error } = await supabase
+      .from('rooms')
+      .select('*')
+      .eq('id', roomId)
+      .single();
 
-  if (roomData && !error) {
-    // Map Supabase room to Room type
-    const room: Room = {
-      id: roomData.id,
-      name: roomData.name || `Room ${roomData.code}`,
-      description: roomData.description || undefined,
-      owner_id: roomData.host_id,
-      roomCode: roomData.code,
-      is_public: false,
-      max_members: roomData.max_players,
-      created_at: new Date(roomData.created_at),
-      updated_at: new Date(roomData.created_at),
-    };
+    if (roomData && !error) {
+      // Check if user is a member of this room
+      const { data: memberData } = await supabase
+        .from('room_members')
+        .select('id')
+        .eq('room_id', roomId)
+        .eq('user_id', userId)
+        .single();
+
+      const isMember = memberData || store.isRoomMember(roomId, userId);
+      
+      if (!isMember) {
+        return {
+          success: false,
+          error: new ArenaError(
+            'You are not a member of this room',
+            ErrorCodes.NOT_MEMBER
+          ),
+        };
+      }
+
+      // Map Supabase room to Room type
+      const room: Room = {
+        id: roomData.id,
+        name: roomData.name || `Room ${roomData.code}`,
+        description: roomData.description || undefined,
+        owner_id: roomData.host_id,
+        roomCode: roomData.code,
+        is_public: false,
+        max_members: roomData.max_players,
+        created_at: new Date(roomData.created_at),
+        updated_at: new Date(roomData.created_at),
+      };
+      return {
+        success: true,
+        data: room,
+      };
+    }
+
+    // Fallback to in-memory store for backward compatibility
+    let room = store.getRoomById(roomId);
+    if (!room) {
+      return {
+        success: false,
+        error: new ArenaError(
+          'Room not found',
+          ErrorCodes.ROOM_NOT_FOUND
+        ),
+      };
+    }
+
+    // Check membership for in-memory rooms too
+    const isMember = store.isRoomMember(roomId, userId);
+    if (!isMember) {
+      return {
+        success: false,
+        error: new ArenaError(
+          'You are not a member of this room',
+          ErrorCodes.NOT_MEMBER
+        ),
+      };
+    }
+
     return {
       success: true,
       data: room,
     };
-  }
-
-  // Fallback to in-memory store for backward compatibility
-  let room = store.getRoomById(roomId);
-  if (!room) {
+  } catch (error: any) {
     return {
       success: false,
       error: new ArenaError(
-        'Room not found',
-        ErrorCodes.ROOM_NOT_FOUND
+        error.message || 'Failed to get room',
+        ErrorCodes.INVALID_INPUT
       ),
     };
   }
-
-  return {
-    success: true,
-    data: room,
-  };
 }
 
 /**
@@ -474,49 +518,80 @@ export async function joinRoom(roomId: string): Promise<Result<Room, ArenaError>
 
 /**
  * Get room members
+ * Requires user to be a member of the room
  */
 export async function getRoomMembers(roomId: string): Promise<Result<RoomMember[], ArenaError>> {
-  await getDeviceId(); // Ensure device ID exists
+  try {
+    const userId = await getDeviceId();
 
-  // Try Supabase first
-  const { data: membersData, error } = await supabase
-    .from('room_members')
-    .select('*')
-    .eq('room_id', roomId);
+    // Check membership first
+    const { data: memberData } = await supabase
+      .from('room_members')
+      .select('id')
+      .eq('room_id', roomId)
+      .eq('user_id', userId)
+      .single();
 
-  if (membersData && !error) {
-    // Map Supabase members to RoomMember type
-    const members: RoomMember[] = membersData.map(m => ({
-      id: m.id,
-      room_id: m.room_id,
-      user_id: m.user_id,
-      role: m.role as 'owner' | 'admin' | 'member',
-      joined_at: new Date(m.created_at),
-    }));
+    const isMember = memberData || store.isRoomMember(roomId, userId);
+    
+    if (!isMember) {
+      return {
+        success: false,
+        error: new ArenaError(
+          'You are not a member of this room',
+          ErrorCodes.NOT_MEMBER
+        ),
+      };
+    }
 
+    // Try Supabase first
+    const { data: membersData, error } = await supabase
+      .from('room_members')
+      .select('*')
+      .eq('room_id', roomId);
+
+    if (membersData && !error) {
+      // Map Supabase members to RoomMember type
+      const members: RoomMember[] = membersData.map(m => ({
+        id: m.id,
+        room_id: m.room_id,
+        user_id: m.user_id,
+        role: m.role as 'owner' | 'admin' | 'member',
+        joined_at: new Date(m.created_at),
+      }));
+
+      return {
+        success: true,
+        data: members,
+      };
+    }
+
+    // Fallback to in-memory store
+    const room = store.getRoomById(roomId);
+    if (!room) {
+      return {
+        success: false,
+        error: new ArenaError(
+          'Room not found',
+          ErrorCodes.ROOM_NOT_FOUND
+        ),
+      };
+    }
+
+    const members = store.getRoomMembers(roomId);
     return {
       success: true,
       data: members,
     };
-  }
-
-  // Fallback to in-memory store
-  const room = store.getRoomById(roomId);
-  if (!room) {
+  } catch (error: any) {
     return {
       success: false,
       error: new ArenaError(
-        'Room not found',
-        ErrorCodes.ROOM_NOT_FOUND
+        error.message || 'Failed to get room members',
+        ErrorCodes.INVALID_INPUT
       ),
     };
   }
-
-  const members = store.getRoomMembers(roomId);
-  return {
-    success: true,
-    data: members,
-  };
 }
 
 /**

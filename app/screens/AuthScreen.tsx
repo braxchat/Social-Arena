@@ -95,7 +95,13 @@ export default function AuthScreen({ navigation }: Props) {
                 placeholder="Enter your username"
                 placeholderTextColor="#888888"
                 value={username}
-                onChangeText={(text) => setUsername(text.replace(/\s/g, ''))}
+                onChangeText={(text) => {
+                  // Replace spaces with underscores
+                  let filtered = text.replace(/\s/g, '_');
+                  // Only allow lowercase letters and numbers
+                  filtered = filtered.replace(/[^a-z0-9_]/g, '');
+                  setUsername(filtered);
+                }}
                 autoCapitalize="none"
                 autoCorrect={false}
               />

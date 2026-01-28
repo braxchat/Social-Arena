@@ -18,4 +18,6 @@ export * from './arenas';
 export * from './participants';
 export * from './location';
 export * from './proximity';
+// TEMPORARY: Development/testing only - Remove when ready for production
+export * from './cache';
 

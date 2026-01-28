@@ -19,7 +19,7 @@ import {
   TouchableWithoutFeedback,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import * as Clipboard from '@react-native-clipboard/clipboard';
+import * as Clipboard from 'expo-clipboard';
 import * as Sharing from 'expo-sharing';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp } from '@react-navigation/native';
@@ -28,8 +28,10 @@ import {
   getRoom,
   getRoomMembers,
   getActiveArenaInRoom,
+  getPendingArenaInRoom,
   createArena,
   getArena,
+  getArenaParticipants,
   store,
   getCurrentUser,
   updateRoomName,
@@ -51,7 +53,12 @@ export default function RoomScreen({ navigation, route }: Props) {
   const { roomId } = route.params;
   const [room, setRoom] = useState<Room | null>(null);
   const [members, setMembers] = useState<RoomMember[]>([]);
-  const [currentArena, setCurrentArena] = useState<Arena | null>(null);
+  const [activeArena, setActiveArena] = useState<Arena | null>(null);
+  const [pendingArena, setPendingArena] = useState<Arena | null>(null);
+  const [isInPendingArena, setIsInPendingArena] = useState(false);
+  const [isHostingPendingArena, setIsHostingPendingArena] = useState(false);
+  const [isHostingActiveArena, setIsHostingActiveArena] = useState(false);
+  const [pendingArenaParticipantCount, setPendingArenaParticipantCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [creatingArena, setCreatingArena] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -94,11 +101,59 @@ export default function RoomScreen({ navigation, route }: Props) {
       }
 
       // Load active arena
-      const arenaResult = getActiveArenaInRoom(roomId);
-      if (arenaResult.success && arenaResult.data) {
-        setCurrentArena(arenaResult.data);
+      const activeArenaResult = getActiveArenaInRoom(roomId);
+      if (activeArenaResult.success && activeArenaResult.data) {
+        setActiveArena(activeArenaResult.data);
+        // Check if current user is hosting the active arena
+        const currentUserId = deviceId || currentUser?.id;
+        if (currentUserId) {
+          setIsHostingActiveArena(
+            activeArenaResult.data.host_id === currentUserId
+          );
+        } else {
+          setIsHostingActiveArena(false);
+        }
       } else {
-        setCurrentArena(null);
+        setActiveArena(null);
+        setIsHostingActiveArena(false);
+      }
+
+      // Load pending (lobby) arena
+      const pendingArenaResult = getPendingArenaInRoom(roomId);
+      if (pendingArenaResult.success && pendingArenaResult.data) {
+        setPendingArena(pendingArenaResult.data);
+        // Check if current user is a participant in the pending arena
+        const currentUserId = deviceId || currentUser?.id;
+        if (currentUserId) {
+          const participant = store.getArenaParticipant(
+            pendingArenaResult.data.id,
+            currentUserId
+          );
+          setIsInPendingArena(
+            participant !== undefined && participant.status === 'joined'
+          );
+          // Check if current user is hosting the pending arena
+          setIsHostingPendingArena(
+            pendingArenaResult.data.host_id === currentUserId
+          );
+        } else {
+          setIsInPendingArena(false);
+          setIsHostingPendingArena(false);
+        }
+        
+        // Load participant count for pending arena
+        const participantsResult = getArenaParticipants(pendingArenaResult.data.id);
+        if (participantsResult.success) {
+          const joinedCount = participantsResult.data.filter(
+            p => p.status === 'joined'
+          ).length;
+          setPendingArenaParticipantCount(joinedCount);
+        }
+      } else {
+        setPendingArena(null);
+        setIsInPendingArena(false);
+        setIsHostingPendingArena(false);
+        setPendingArenaParticipantCount(0);
       }
     } catch (error: any) {
       Alert.alert('Error', error.message || 'Failed to load room data');
@@ -154,27 +209,25 @@ export default function RoomScreen({ navigation, route }: Props) {
     }
   };
 
-  const handleJoinLobby = () => {
-    if (currentArena) {
-      navigation.navigate('Lobby', { arenaId: currentArena.id });
-    }
+  const handleJoinLobby = (arenaId: string) => {
+    navigation.navigate('Lobby', { arenaId });
   };
 
   const handleViewActiveArena = () => {
-    if (currentArena) {
-      navigation.navigate('ActiveArena', { arenaId: currentArena.id });
+    if (activeArena) {
+      navigation.navigate('ActiveArena', { arenaId: activeArena.id });
     }
   };
 
   const handleViewResults = () => {
-    if (currentArena) {
-      navigation.navigate('Results', { arenaId: currentArena.id });
+    if (activeArena) {
+      navigation.navigate('Results', { arenaId: activeArena.id });
     }
   };
 
-  const handleCopyCode = () => {
+  const handleCopyCode = async () => {
     if (room?.roomCode) {
-      Clipboard.setString(room.roomCode);
+      await Clipboard.setStringAsync(room.roomCode);
       Alert.alert('Copied!', `Room code ${room.roomCode} copied to clipboard`);
     }
   };
@@ -193,12 +246,12 @@ export default function RoomScreen({ navigation, route }: Props) {
         });
       } else {
         // Fallback: copy link to clipboard
-        Clipboard.setString(deepLink);
+        await Clipboard.setStringAsync(deepLink);
         Alert.alert('Link Copied', `Deep link copied to clipboard: ${deepLink}`);
       }
     } catch (error) {
       // Fallback: copy link to clipboard
-      Clipboard.setString(deepLink);
+      await Clipboard.setStringAsync(deepLink);
       Alert.alert('Link Copied', `Deep link copied to clipboard: ${deepLink}`);
     }
   };
@@ -295,7 +348,7 @@ export default function RoomScreen({ navigation, route }: Props) {
         <Text style={styles.memberCount}>{members.length} members</Text>
       </View>
 
-      {!currentArena && (
+      {!isHostingPendingArena && !isHostingActiveArena && (
         <TouchableOpacity
           style={[styles.createArenaButton, creatingArena && styles.buttonDisabled]}
           onPress={handleCreateArena}
@@ -309,25 +362,63 @@ export default function RoomScreen({ navigation, route }: Props) {
         </TouchableOpacity>
       )}
 
-      <View style={styles.arenaSection}>
-        <Text style={styles.sectionTitle}>Current Arena</Text>
-        {currentArena ? (
+      {/* Pending Arena Section */}
+      {pendingArena && (
+        <View style={styles.arenaSection}>
+          <Text style={styles.sectionTitle}>Pending Arena</Text>
           <View style={styles.arenaCard}>
-            <Text style={styles.arenaStatus}>
-              Status: {currentArena.status.toUpperCase()}
-            </Text>
+            <View style={styles.arenaHeader}>
+              <Text style={styles.arenaStatus}>
+                {pendingArena.mode === 'predators' ? 'Predators' : 
+                 pendingArena.mode.charAt(0).toUpperCase() + pendingArena.mode.slice(1)}
+              </Text>
+              {isHostingPendingArena && (
+                <View style={styles.hostBadge}>
+                  <Text style={styles.hostBadgeText}>Host</Text>
+                </View>
+              )}
+            </View>
             <Text style={styles.arenaInfo}>
-              Mode: {currentArena.mode} | Duration: {currentArena.duration_minutes} min
+              {pendingArenaParticipantCount} {pendingArenaParticipantCount === 1 ? 'player' : 'players'} • {pendingArena.duration_minutes} min
             </Text>
-            {currentArena.status === 'lobby' && (
+            {isInPendingArena ? (
               <TouchableOpacity
                 style={styles.actionButton}
-                onPress={handleJoinLobby}
+                onPress={() => handleJoinLobby(pendingArena.id)}
+              >
+                <Text style={styles.actionButtonText}>View Lobby</Text>
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity
+                style={styles.actionButton}
+                onPress={() => handleJoinLobby(pendingArena.id)}
               >
                 <Text style={styles.actionButtonText}>Join Lobby</Text>
               </TouchableOpacity>
             )}
-            {currentArena.status === 'active' && (
+          </View>
+        </View>
+      )}
+
+      {/* Active Arena Section */}
+      <View style={styles.arenaSection}>
+        <Text style={styles.sectionTitle}>Active Arena</Text>
+        {activeArena ? (
+          <View style={styles.arenaCard}>
+            <View style={styles.arenaHeader}>
+              <Text style={styles.arenaStatus}>
+                Status: {activeArena.status.toUpperCase()}
+              </Text>
+              {isHostingActiveArena && (
+                <View style={styles.hostBadge}>
+                  <Text style={styles.hostBadgeText}>Host</Text>
+                </View>
+              )}
+            </View>
+            <Text style={styles.arenaInfo}>
+              Mode: {activeArena.mode} | Duration: {activeArena.duration_minutes} min
+            </Text>
+            {activeArena.status === 'active' && (
               <TouchableOpacity
                 style={styles.actionButton}
                 onPress={handleViewActiveArena}
@@ -335,7 +426,7 @@ export default function RoomScreen({ navigation, route }: Props) {
                 <Text style={styles.actionButtonText}>View Arena</Text>
               </TouchableOpacity>
             )}
-            {currentArena.status === 'ended' && (
+            {activeArena.status === 'ended' && (
               <TouchableOpacity
                 style={styles.actionButton}
                 onPress={handleViewResults}
@@ -363,15 +454,26 @@ export default function RoomScreen({ navigation, route }: Props) {
             data={members}
             keyExtractor={(item) => item.id}
             renderItem={({ item }) => {
-              const user = store.getUserById(item.user_id);
               const isCurrentUser = item.user_id === deviceId || item.user_id === currentUser?.id;
               const isOwner = item.user_id === room.owner_id;
+              
+              // For current user, show their username from auth
+              let displayName = `User ${item.user_id.slice(-6)}`;
+              if (isCurrentUser && currentUser) {
+                displayName = currentUser.username || currentUser.display_name || displayName;
+              } else {
+                // Try to get from store (for in-memory users)
+                const user = store.getUserById(item.user_id);
+                if (user) {
+                  displayName = user.username || user.display_name || displayName;
+                }
+              }
               
               return (
                 <View style={styles.memberItem}>
                   <View style={styles.memberInfo}>
                     <Text style={styles.memberName}>
-                      {user?.username || user?.display_name || `User ${item.user_id.slice(-6)}`}
+                      {displayName}
                       {isCurrentUser && ' (You)'}
                     </Text>
                     <Text style={styles.memberRole}>
@@ -423,7 +525,6 @@ export default function RoomScreen({ navigation, route }: Props) {
                           style={styles.nameInput}
                           value={roomName}
                           onChangeText={setRoomName}
-                          placeholder="Room name"
                           placeholderTextColor="#888888"
                           autoFocus
                           maxLength={50}
@@ -637,11 +738,28 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     marginBottom: 10,
   },
+  arenaHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
   arenaStatus: {
     color: '#FFFFFF',
     fontSize: 18,
     fontWeight: '600',
-    marginBottom: 8,
+    flex: 1,
+  },
+  hostBadge: {
+    backgroundColor: '#4A90E2',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 4,
+  },
+  hostBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '600',
   },
   arenaInfo: {
     color: '#888888',
@@ -836,9 +954,6 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 16,
     fontWeight: '600',
-  },
-  buttonDisabled: {
-    opacity: 0.5,
   },
   gameModeModalOverlay: {
     flex: 1,
